@@ -70,6 +70,7 @@ func newExecCmd() *cobra.Command {
 					return err
 				}
 			}
+
 			return i.Exec(exec, args[0])
 		},
 	}

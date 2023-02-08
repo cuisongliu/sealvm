@@ -41,3 +41,10 @@ sealvm exec -r golang "scp -o \"StrictHostKeyChecking no\" /root/go/src/github.c
 sealvm exec --hostnames  default-node-0 "sealos version" 
 sealvm exec --hostnames  default-node-0 "sealos run labring/kubernetes:v1.25.0 --single" 
 ```
+
+
+- cgroups: cgroup mountpoint does not exist: unknown
+```shell
+sudo mkdir /sys/fs/cgroup/systemd
+sudo mount -t cgroup -o none,name=systemd cgroup /sys/fs/cgroup/systemd
+```
