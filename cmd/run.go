@@ -102,6 +102,7 @@ func newRunCmd() *cobra.Command {
 	runCmd.Flags().StringVarP(&vm.Spec.Type, "type", "t", v1.MultipassType, "choose a type of infra, multipass")
 	runCmd.Flags().StringVarP(&vm.Name, "name", "n", "default", "name of cluster to applied init action")
 
+	//TODO need delete nodes dev dev-mounts
 	runCmd.Flags().IntVarP(&nodes, "nodes", "w", 0, "number of nodes")
 	runCmd.Flags().BoolVarP(&dev, "dev", "d", false, "number of dev")
 	runCmd.Flags().StringVarP(&src, "dev-mounts", "s", defaultMount, "gopath src dir")

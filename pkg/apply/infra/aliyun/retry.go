@@ -17,10 +17,9 @@ package aliyun
 import (
 	"errors"
 	"fmt"
-
-	"github.com/labring/sealos/pkg/utils/logger"
-	"github.com/labring/sealos/pkg/utils/retry"
-	"github.com/labring/sealos/pkg/utils/strings"
+	"github.com/labring/sealvm/pkg/utils/logger"
+	"github.com/labring/sealvm/pkg/utils/retry"
+	"github.com/labring/sealvm/pkg/utils/strings"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/responses"

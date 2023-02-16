@@ -15,19 +15,17 @@
 package aliyun
 
 import (
+	"github.com/labring/sealvm/pkg/utils/logger"
+	"github.com/labring/sealvm/pkg/utils/rand"
+	v1 "github.com/labring/sealvm/types/api/v1"
+	"os"
 	"strings"
-
-	"github.com/labring/sealos/pkg/utils/logger"
-	"github.com/labring/sealos/pkg/utils/rand"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-
-	"github.com/labring/sealos/pkg/types/v1beta1"
-	"github.com/labring/sealos/pkg/types/validation"
 )
 
 type ActionName string
@@ -49,28 +47,28 @@ const (
 type AliProvider struct {
 	EcsClient ecs.Client
 	VpcClient vpc.Client
-	Infra     *v1beta1.Infra
+	Infra     *v1.VirtualMachine
 }
 
 type AliFunc func() error
 
 func (a *AliProvider) ReconcileResource(resourceKey ResourceName, action AliFunc) error {
-	if resourceKey.Value(a.Infra.Status) != "" {
-		logger.Debug("using resource status value %s: %s", resourceKey, resourceKey.Value(a.Infra.Status))
+	if resourceKey.StatusValue(&a.Infra.Status) != "" {
+		logger.Debug("using resource status value %s: %s", resourceKey, resourceKey.StatusValue(&a.Infra.Status))
 		return nil
 	}
 	if err := action(); err != nil {
 		logger.Error("reconcile resource %s failed err: %s", resourceKey, err)
 		return err
 	}
-	if resourceKey.Value(a.Infra.Status) != "" {
-		logger.Info("create resource success %s: %s", resourceKey, resourceKey.Value(a.Infra.Status))
+	if resourceKey.StatusValue(&a.Infra.Status) != "" {
+		logger.Info("create resource success %s: %s", resourceKey, resourceKey.StatusValue(&a.Infra.Status))
 	}
 	return nil
 }
 
 func (a *AliProvider) DeleteResource(resourceKey ResourceName, action AliFunc) {
-	val := resourceKey.Value(a.Infra.Status)
+	val := resourceKey.StatusValue(&a.Infra.Status)
 	if val == "" {
 		logger.Warn("delete resource not exists %s", resourceKey)
 		return
@@ -98,12 +96,12 @@ var RecocileFuncMap = map[ActionName]func(provider *AliProvider) error{
 		current := sets.NewString()
 		spec := sets.NewString()
 		for _, h := range aliProvider.Infra.Status.Hosts {
-			current.Insert(strings.Join(h.Roles, ","))
+			current.Insert(h.Role)
 		}
 		for _, h := range aliProvider.Infra.Spec.Hosts {
-			spec.Insert(strings.Join(h.Roles, ","))
+			spec.Insert(h.Role)
 			host := &h
-			statusIndex := aliProvider.Infra.Status.FindHostsByRoles(h.Roles)
+			statusIndex := aliProvider.Infra.Status.FindHostsByRoles(h.Role)
 			if statusIndex < 0 {
 				aliProvider.Infra.Status.Hosts = append(aliProvider.Infra.Status.Hosts, v1beta1.InfraHostStatus{Roles: h.Roles})
 				statusIndex = len(aliProvider.Infra.Status.Hosts) - 1
@@ -112,9 +110,9 @@ var RecocileFuncMap = map[ActionName]func(provider *AliProvider) error{
 			err := aliProvider.ReconcileInstances(host, status)
 			if err != nil {
 				errorMsg = append(errorMsg, err.Error())
-				status.Ready = false
+				status.State = "Pending"
 			} else {
-				status.Ready = true
+				status.State = "Running"
 			}
 		}
 		deleteData := current.Difference(spec)
@@ -127,7 +125,7 @@ var RecocileFuncMap = map[ActionName]func(provider *AliProvider) error{
 			finalStatus = append(finalStatus[:statusIndex], finalStatus[statusIndex+1:]...)
 		}
 		if len(instanceIDs) != 0 {
-			ShouldBeDeleteInstancesIDs.SetValue(aliProvider.Infra.Status, strings.Join(instanceIDs, ","))
+			ShouldBeDeleteInstancesIDs.StatusSetValue(&aliProvider.Infra.Status, strings.Join(instanceIDs, ","))
 			aliProvider.DeleteResource(ShouldBeDeleteInstancesIDs, aliProvider.DeleteInstances)
 			aliProvider.Infra.Status.Hosts = finalStatus
 		}
@@ -152,9 +150,9 @@ var DeleteFuncMap = map[ActionName]func(provider *AliProvider){
 	ClearInstances: func(aliProvider *AliProvider) {
 		var instanceIDs []string
 		for _, h := range aliProvider.Infra.Status.Hosts {
-			instances, err := aliProvider.GetInstancesInfo(h.ToHost(), JustGetInstanceInfo)
+			instances, err := aliProvider.GetInstancesInfo(&h, JustGetInstanceInfo)
 			if err != nil {
-				logger.Error("get %s instanceInfo failed %v", strings.Join(h.Roles, ","), err)
+				logger.Error("get %s instanceInfo failed %v", h.Role, err)
 			}
 			for _, instance := range instances {
 				instanceIDs = append(instanceIDs, instance.InstanceID)
@@ -162,7 +160,7 @@ var DeleteFuncMap = map[ActionName]func(provider *AliProvider){
 		}
 
 		if len(instanceIDs) != 0 {
-			ShouldBeDeleteInstancesIDs.SetValue(aliProvider.Infra.Status, strings.Join(instanceIDs, ","))
+			ShouldBeDeleteInstancesIDs.StatusSetValue(&aliProvider.Infra.Status, strings.Join(instanceIDs, ","))
 		}
 		aliProvider.DeleteResource(ShouldBeDeleteInstancesIDs, aliProvider.DeleteInstances)
 	},
@@ -178,24 +176,26 @@ var DeleteFuncMap = map[ActionName]func(provider *AliProvider){
 }
 
 func (a *AliProvider) NewClient() error {
-	if len(a.Infra.Spec.Metadata.RegionIDs) == 0 {
+	if len(RegionIDs.SpecValue(a.Infra)) == 0 {
 		return errors.New("your infra module not set region id")
 	}
-	if len(a.Infra.Spec.Credential.AccessKey) == 0 {
+	if len(os.Getenv(AccessKey)) == 0 {
 		return errors.New("your infra module not set AccessKey")
 	}
-	if len(a.Infra.Spec.Credential.AccessSecret) == 0 {
+	if len(os.Getenv(AccessSecret)) == 0 {
 		return errors.New("your infra module not set AccessSecret")
 	}
-
-	regionID := a.Infra.Spec.Metadata.RegionIDs[rand.Rand(len(a.Infra.Spec.Metadata.RegionIDs))]
-	a.Infra.Status.Cluster.RegionID = regionID
+	regionIDs := strings.Split(RegionIDs.SpecValue(a.Infra), ",")
+	regionID := regionIDs[rand.Rand(len(regionIDs))]
+	RegionID.StatusSetValue(&a.Infra.Status, regionID)
 	logger.Info("using regionID is %s", regionID)
-	ecsClient, err := ecs.NewClientWithAccessKey(a.Infra.Status.Cluster.RegionID, a.Infra.Spec.Credential.AccessKey, a.Infra.Spec.Credential.AccessSecret)
+	ak := os.Getenv(AccessKey)
+	sk := os.Getenv(AccessSecret)
+	ecsClient, err := ecs.NewClientWithAccessKey(regionID, ak, sk)
 	if err != nil {
 		return err
 	}
-	vpcClient, err := vpc.NewClientWithAccessKey(a.Infra.Status.Cluster.RegionID, a.Infra.Spec.Credential.AccessKey, a.Infra.Spec.Credential.AccessSecret)
+	vpcClient, err := vpc.NewClientWithAccessKey(regionID, ak, sk)
 	if err != nil {
 		return err
 	}
@@ -253,13 +253,13 @@ func (a *AliProvider) Apply() error {
 	return a.Reconcile()
 }
 
-func DefaultInfra(infra *v1beta1.Infra) error {
+func DefaultInfra(infra *v1.VirtualMachine) error {
 	//https://help.aliyun.com/document_detail/63440.htm?spm=a2c4g.11186623.0.0.f5952752gkxpB7#t9856.html
-	if infra.Spec.Metadata.Instance.IsSeize {
-		infra.Status.Cluster.SpotStrategy = "SpotAsPriceGo"
-	} else {
-		infra.Status.Cluster.SpotStrategy = "NoSpot"
+	if SpotStrategy.SpecValue(infra) == "" {
+		SpotStrategy.SpecSetValue(infra, "SpotAsPriceGo")
 	}
+	//NoSpot
+
 	return nil
 }
 
